@@ -131,27 +131,27 @@ This frontend is designed to work with two backend services:
 
 ```mermaid
 flowchart LR
-  U[User Browser] -->|HTTP(S) :3100| G[Ginie\nNext.js]
+  U["User Browser"] -->|"HTTP :3100"| G["Ginie<br/>Next.js"]
 
   %% Same-origin proxy so browser cookies work reliably
-  G -->|/api/proxy/*| NXP[Next.js Proxy Route\napp/api/proxy/[...path]]
-  NXP -->|HTTP(S) :8080| UA[user-api\nExpress]
+  G -->|"/api/proxy/*"| NXP["Next.js Proxy Route<br/>app/api/proxy/*"]
+  NXP -->|"HTTP :8080"| UA["user-api<br/>Express"]
 
   %% user-api stores sessions/jobs and rate limits
   UA --> PG[(Postgres)]
   UA --> RD[(Redis)]
 
   %% user-api proxies to upstream smart-contract pipeline services
-  UA --> UP[Upstream Pipeline Service\n/api/ai/pipeline\n/api/job/*\n/api/artifacts/*\n/api/verify/*]
+  UA --> UP["Upstream Pipeline Service<br/>/api/ai/pipeline<br/>/api/job/*<br/>/api/artifacts/*<br/>/api/verify/*"]
   UP --> CH[(EVM Chains)]
 
   %% user-api proxies to Frontend_Builder
-  UA -->|/u/proxy/builder/*| FB[Frontend_Builder\nFastAPI :8000]
+  UA -->|"/u/proxy/builder/*"| FB["Frontend_Builder<br/>FastAPI :8000"]
   FB --> FPG[(Frontend_Builder Postgres)]
   FB --> SB[Sandbox / Runner]
 
   %% service-to-service orchestration
-  FB -->|/u/service/*\n(Bearer secret + X-User-Id)| UA
+  FB -->|"/u/service/*<br/>(Bearer secret + X-User-Id)"| UA
 ```
 
 ### Why the Next.js proxy exists
@@ -294,6 +294,190 @@ sequenceDiagram
 
 ---
 
+## API Surface (authoritative endpoint index)
+
+Ginie talks to **user-api** only (through the Next.js proxy). `user-api` then either:
+
+- Serves the request directly (auth, jobs DB, entitlements, audit logs)
+- Proxies the request to the upstream smart-contract pipeline service (`EVI_BASE_URL` / `EVI_V4_BASE_URL`)
+- Proxies the request to **Frontend_Builder** (`FRONTEND_BUILDER_BASE_URL`)
+
+### Ginie → Next.js proxy → user-api
+
+In the browser, most calls look like:
+
+- `GET /api/proxy/u/...`
+- `POST /api/proxy/u/...`
+
+Where everything after `/api/proxy` is forwarded to `user-api`.
+
+### user-api: Auth
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/u/auth/send-otp` | Send OTP to email (rate limited). |
+| POST | `/u/auth/verify` | Verify OTP and set session cookies (`evium_access`, `evium_refresh`, `evium_csrf`). |
+| POST | `/u/auth/refresh` | Rotate access/refresh cookies and issue a new CSRF token. |
+| POST | `/u/auth/logout` | Revoke session and clear cookies. |
+
+### user-api: User profile
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/u/user/me` | Get current user + entitlements. |
+| POST | `/u/user/profile` | Update profile fields (CSRF required). |
+| POST | `/u/user/avatar` | Upload avatar bytes (CSRF required). |
+| GET | `/u/user/avatar/:id` | Fetch avatar image by id. |
+| DELETE | `/u/user/avatar/:id` | Delete avatar (CSRF required). |
+| GET | `/u/user/avatars` | List avatar metadata for current user. |
+| POST | `/u/user/avatar/prune` | Prune avatars (CSRF required). |
+
+### user-api: Jobs (ownership + metadata)
+
+`user-api` stores job ownership in Postgres (so the UI can list “my jobs” even though compute happens upstream).
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/u/jobs/attach` | Attach an upstream `jobId` to the current user (CSRF required). |
+| GET | `/u/jobs` | List current user’s jobs (cursor pagination). |
+| GET | `/u/jobs/:jobId` | Get a single user job record. |
+| PATCH | `/u/jobs/:jobId/meta` | Update title/metadata/tags for a job (CSRF required). |
+| DELETE | `/u/jobs/:jobId` | Soft-delete a job (CSRF required). |
+| GET | `/u/jobs/:jobId/export` | Export a JSON bundle for a job. |
+| POST | `/u/jobs/cache` | Update cached job status fields (CSRF required). |
+
+### user-api: Proxy → Pipeline (smart contract generation/deploy)
+
+These routes proxy to the upstream pipeline service and also attach jobs to the authenticated user.
+
+| Method | Path | Upstream | Purpose |
+|---|---|---|---|
+| POST | `/u/proxy/ai/pipeline` | `POST /api/ai/pipeline` | Create a pipeline job from a prompt. |
+
+### user-api: Proxy → Job status/logs (polling + SSE)
+
+| Method | Path | Upstream | Purpose |
+|---|---|---|---|
+| GET | `/u/proxy/job/:id` | `GET /api/job/:id` | Full job detail. |
+| GET | `/u/proxy/job/:id/status` | `GET /api/job/:id/status` | Job status/progress. |
+| GET | `/u/proxy/job/:id/logs` | `GET /api/job/:id/logs` | Pollable logs. |
+| GET | `/u/proxy/job/:id/logs/stream` | `GET /api/job/:id/logs/stream` | SSE log stream (streaming). |
+
+### user-api: Proxy → Artifacts
+
+| Method | Path | Upstream | Purpose |
+|---|---|---|---|
+| GET | `/u/proxy/artifacts` | `GET /api/artifacts` | Download job artifacts (combined). |
+| GET | `/u/proxy/artifacts/sources` | `GET /api/artifacts/sources` | Solidity source(s). |
+| GET | `/u/proxy/artifacts/abis` | `GET /api/artifacts/abis` | ABI JSON. |
+| GET | `/u/proxy/artifacts/scripts` | `GET /api/artifacts/scripts` | Scripts/build outputs (if available). |
+| GET | `/u/proxy/artifacts/audit` | `GET /api/artifacts/audit` | Audit artifact. |
+| GET | `/u/proxy/artifacts/compliance` | `GET /api/artifacts/compliance` | Compliance artifact. |
+
+### user-api: Proxy → Audit & Compliance (by job)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/u/proxy/audit/byJob` | Run audit for a job id (CSRF required). |
+| POST | `/u/proxy/compliance/byJob` | Run compliance for a job id (CSRF required). |
+
+### user-api: Proxy → Verification
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/u/proxy/verify/byAddress` | Verify a deployed contract by address (CSRF required). |
+| POST | `/u/proxy/verify/byJob` | Verify contract using job artifacts (CSRF required). |
+| GET | `/u/proxy/verify/status` | Check verification status (rate limited). |
+
+### user-api: Wallet-based Deployment (user signs transactions)
+
+These are wrappers around upstream wallet-deploy endpoints.
+
+Notes:
+
+- Pro-only (requires entitlements; enforced in user-api)
+- `POST` routes require CSRF
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/u/proxy/wallet/networks` | List supported networks + default. |
+| POST | `/u/proxy/wallet/deploy` | Start wallet deploy (creates a signing session). |
+| GET | `/u/proxy/wallet/sign/:sessionId` | Fetch tx details for the session to sign. |
+| POST | `/u/proxy/wallet/sign/:sessionId/submit` | Submit signed tx info (`txHash`, `walletAddress`). |
+| GET | `/u/proxy/wallet/sessions/stats` | Session statistics. |
+
+### user-api: Frontend_Builder wrapper routes
+
+These are the routes Ginie should use for “frontend building” and “DApp creation”.
+
+| Domain | Method | Path | Proxies to Frontend_Builder |
+|---|---|---|---|
+| Projects | POST | `/u/proxy/builder/projects` | `POST /chat` |
+| Projects | GET | `/u/proxy/builder/projects` | DB-backed list + optional upstream refresh |
+| Projects | GET | `/u/proxy/builder/projects/:id` | DB-backed detail + optional `GET /chats/{id}/messages` |
+| Projects | PATCH | `/u/proxy/builder/projects/:id` | DB cache update |
+| Projects | DELETE | `/u/proxy/builder/projects/:id` | DB soft delete |
+| Projects | GET | `/u/proxy/builder/projects/:id/status` | `GET /chats/{id}/build-status` |
+| Files | GET | `/u/proxy/builder/projects/:id/files` | `GET /projects/{id}/files` |
+| Files | GET | `/u/proxy/builder/projects/:id/file?path=...` | `GET /projects/{id}/files/{file_path}` |
+| Files | GET | `/u/proxy/builder/projects/:id/download` | `GET /projects/{id}/download` |
+| Export | POST | `/u/proxy/builder/projects/:id/export/github` | `POST /api/projects/{id}/export-github` |
+| Events | GET | `/u/proxy/builder/projects/:id/events/stream` | Bridges Frontend_Builder WS → SSE |
+| DApp | POST | `/u/proxy/builder/dapp/create` | `POST /dapp/create` |
+| DApp | POST | `/u/proxy/builder/dapp/frontend-for-contract` | `POST /dapp/frontend-for-contract` |
+| DApp | GET | `/u/proxy/builder/projects/:id/contracts` | `GET /projects/{id}/contracts` |
+
+### user-api: Service-to-service routes (Frontend_Builder → user-api)
+
+Frontend_Builder uses these to run pipeline jobs under the end user’s identity (calls are authenticated with `USERAPI_SERVICE_SECRET` + `X-User-Id`).
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/u/service/ai/pipeline` | Create pipeline job as user (service-to-service). |
+| GET | `/u/service/job/:id` | Job detail (service-to-service). |
+| GET | `/u/service/job/:id/status` | Job status (service-to-service). |
+| GET | `/u/service/job/:id/logs/stream` | SSE log stream (service-to-service). |
+| GET | `/u/service/artifacts` | Artifacts (service-to-service). |
+| GET | `/u/service/artifacts/sources` | Sources (service-to-service). |
+| GET | `/u/service/artifacts/abis` | ABIs (service-to-service). |
+| POST | `/u/service/verify/byJob` | Verify by job (service-to-service). |
+| POST | `/u/service/audit/byJob` | Audit by job (service-to-service). |
+| POST | `/u/service/compliance/byJob` | Compliance by job (service-to-service). |
+
+### user-api: Docs
+
+| Path | Purpose |
+|---|---|
+| `/docs` | Swagger UI |
+| `/openapi.json` | OpenAPI JSON |
+
+---
+
+## Frontend Building (what happens when you create a Builder project)
+
+At a high level, the “Frontend Builder” flow looks like this:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser (Ginie)
+  participant N as Next.js Proxy
+  participant U as user-api
+  participant F as Frontend_Builder
+
+  B->>N: POST /api/proxy/u/proxy/builder/projects { prompt }
+  N->>U: POST /u/proxy/builder/projects
+  U->>F: POST /chat
+  F-->>U: 200 { chat_id }
+  U-->>B: 200 { project: { id, fb_project_id }, upstream }
+
+  B->>N: GET /api/proxy/u/proxy/builder/projects/:id/events/stream
+  N->>U: GET /u/proxy/builder/projects/:id/events/stream
+  U->>F: WS /ws/{fb_project_id}
+  F-->>U: WS messages (build events)
+  U-->>B: SSE events (message, heartbeat, upstream_open, ...)
+```
+
 ## Pipeline Jobs (Create → Track → Logs → Artifacts)
 
 The smart-contract “pipeline” runs in an upstream service (AI → compile → deploy → verify). `user-api` acts as a gateway:
@@ -313,8 +497,8 @@ sequenceDiagram
   participant UP as Upstream Pipeline
   participant DB as Postgres
 
-  B->>N: POST /api/proxy/u/ai/pipeline { prompt, network, ... }
-  N->>U: POST /u/ai/pipeline
+  B->>N: POST /api/proxy/u/proxy/ai/pipeline { prompt, network, ... }
+  N->>U: POST /u/proxy/ai/pipeline
   U->>UP: POST /api/ai/pipeline
   UP-->>U: 200 { job: { id } }
   U->>DB: attach job to user + audit log
@@ -326,8 +510,8 @@ sequenceDiagram
 
 There are two common patterns:
 
-- **Polling**: `GET /u/job/:id/logs?offset=...`
-- **Streaming**: `GET /u/job/:id/logs/stream` (Server-Sent Events)
+- **Polling**: `GET /u/proxy/job/:id/logs?offset=...`
+- **Streaming**: `GET /u/proxy/job/:id/logs/stream` (Server-Sent Events)
 
 When Ginie calls SSE through the Next.js proxy, `app/api/proxy/[...path]/route.ts` preserves the stream by returning `NextResponse(res.body)`.
 
@@ -367,22 +551,27 @@ sequenceDiagram
   participant U as user-api
   participant CH as Chain
 
-  B->>N: POST /api/proxy/u/wallet-deploy/submit (create job)
-  N->>U: POST /u/wallet-deploy/submit
-  U-->>N: 200 { jobId, txRequest }
-  N-->>B: 200 { jobId, txRequest }
+  B->>N: POST /api/proxy/u/proxy/wallet/deploy (create session)
+  N->>U: POST /u/proxy/wallet/deploy
+  U-->>N: 200 { sessionId, networkConfig, ... }
+  N-->>B: 200 { sessionId, networkConfig, ... }
+
+  B->>N: GET /api/proxy/u/proxy/wallet/sign/:sessionId
+  N->>U: GET /u/proxy/wallet/sign/:sessionId
+  U-->>N: 200 { txRequest, ... }
+  N-->>B: 200 { txRequest, ... }
 
   B->>W: eth_sendTransaction(txRequest)
   W-->>B: txHash
 
-  B->>N: POST /api/proxy/u/wallet-deploy/tx (jobId, txHash)
-  N->>U: POST /u/wallet-deploy/tx
-  U-->>N: 200 ok
-  N-->>B: 200 ok
+  B->>N: POST /api/proxy/u/proxy/wallet/sign/:sessionId/submit { txHash, walletAddress }
+  N->>U: POST /u/proxy/wallet/sign/:sessionId/submit
+  U-->>N: 200 { jobId, ... }
+  N-->>B: 200 { jobId, ... }
 
   U->>CH: observe confirmations / receipt
-  B->>N: GET /api/proxy/u/job/:id/status (poll)
-  N->>U: GET /u/job/:id/status
+  B->>N: GET /api/proxy/u/proxy/job/:id/status (poll)
+  N->>U: GET /u/proxy/job/:id/status
   U-->>B: state/progress/address/verified
 ```
 
@@ -418,13 +607,68 @@ These routes are implemented in `Evi_User_Management/user-api/src/index.ts`:
 
 ### Builder events: WS → SSE bridge
 
-Frontend_Builder’s native updates are WebSocket-based (`/ws/{id}?token=JWT`).
+Frontend_Builder’s native updates are WebSocket-based (`/ws/{id}`).
 
 To make it easy for Ginie to consume updates through the same-origin proxy, `user-api` exposes:
 
 - `GET /u/proxy/builder/projects/:id/events/stream`
 
 Which bridges events and streams them as SSE to the browser.
+
+### Frontend_Builder upstream endpoints (FastAPI)
+
+These endpoints are implemented in `Ginie_Frontend_Builder` (see `main.py`). Ginie should not call them directly in production; they are listed here for debugging and to understand what `user-api` is proxying to.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/chat` | Create a new builder project (chat) and start background agent run. |
+| GET | `/chats/{id}/messages` | Get message/event history for a project. |
+| GET | `/chats/{id}/build-status` | Get build status for a project. |
+| GET | `/projects` | List projects. |
+| GET | `/projects/{id}/files` | List project files (from sandbox/DB). |
+| GET | `/projects/{id}/files/{file_path}` | Get file content. |
+| GET | `/projects/{id}/download` | Download project as ZIP. |
+| POST | `/api/projects/{project_id}/export-github` | Export project files to a new GitHub repo. |
+| POST | `/dapp/create` | Orchestrate full DApp (contract + frontend) build. |
+| POST | `/dapp/frontend-for-contract` | Generate a frontend for an already-deployed contract. |
+| GET | `/projects/{id}/contracts` | List contract deployments associated with a project. |
+| WS | `/ws/{id}` | Real-time build events stream. |
+
+### DApp creation (contract + frontend) — end-to-end orchestration
+
+When you call `POST /u/proxy/builder/dapp/create`, `user-api` forwards the request to Frontend_Builder `/dapp/create` and passes the authenticated user id via header `x-user-id`.
+
+Frontend_Builder then uses service-to-service endpoints on `user-api` to:
+
+- Create a pipeline job for the user (`/u/service/ai/pipeline`)
+- Poll status and download artifacts (`/u/service/job/:id/status`, `/u/service/artifacts`)
+- Optionally trigger verification (`/u/service/verify/byJob`)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser (Ginie)
+  participant N as Next.js Proxy
+  participant U as user-api
+  participant F as Frontend_Builder
+  participant US as user-api (service)
+  participant UP as Upstream Pipeline
+
+  B->>N: POST /api/proxy/u/proxy/builder/dapp/create
+  N->>U: POST /u/proxy/builder/dapp/create
+  U->>F: POST /dapp/create (x-user-id: <userId>)
+  F-->>U: 200 { chat_id }
+  U-->>B: 200 { ok: true, project: { id, fb_project_id } }
+
+  Note over F,US: Contract pipeline runs via service-to-service auth
+  F->>US: POST /u/service/ai/pipeline (Bearer USERAPI_SERVICE_SECRET + X-User-Id)
+  US->>UP: POST /api/ai/pipeline
+  UP-->>US: 200 { job: { id } }
+  US-->>F: 200 { job: { id } }
+  F->>US: GET /u/service/job/:id/status (poll)
+  F->>US: GET /u/service/artifacts?jobId=...
+  F->>US: POST /u/service/verify/byJob (optional)
+```
 
 ### Service-to-service auth (`/u/service/*`)
 
@@ -441,4 +685,3 @@ Auth model (implemented in `user-api`):
 - Header `X-User-Id: <id>`
 
 This is used by `Frontend_Builder/integrations/userapi_client.py`.
-*** End Patch
