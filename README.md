@@ -1,57 +1,113 @@
-# Camp CodeGen – Frontend
+ # Ginie Frontend (BlockXAI)
 
-A Next.js app for AI-assisted smart contract generation, compile/fix, and deploy to Basecamp.
+ Ginie is a Next.js (App Router) frontend for BlockXAI that provides OTP-based authentication, an AI smart-contract / deployment workflow UI, job tracking, artifacts viewing, and wallet connectivity.
 
-## Quickstart
+ [![Repo](https://img.shields.io/badge/GitHub-BlockXAI%2FGinie__Frontend-black)](https://github.com/BlockXAI/Ginie_Frontend)
 
-- Install deps:
-  - `npm ci`
-- Dev:
-  - `npm run dev`
-- Build/Start:
-  - `npm run build && npm start`
+ ## Quick Links
 
-## Routes
+ - **Repository**: https://github.com/BlockXAI/Ginie_Frontend
+ - **Docs (in this repo)**:
+   - `docs/AI_Deployment_API.md`
+   - `docs/AI_Deploy_UI_UX_Guide.md`
+   - `docs/Technical_Overview.md`
 
-- Console: `http://localhost:3000/smart-contract`
-  - `app/smart-contract/page.tsx` re-exports `app/pipeline/page.tsx`.
-  - A redirect from `/pipeline` to `/smart-contract` is configured in `next.config.js`.
+ ## Tech Stack
 
-## Environment
+ - **Framework**: Next.js 15 (App Router)
+ - **Language**: TypeScript + React
+ - **UI**: TailwindCSS + shadcn/ui (Radix)
+ - **Web3**: wagmi + web3modal (WalletConnect)
 
-Copy `.env.local.example` to `.env.local` and set `NEXT_PUBLIC_API_BASE` if you need to point to a non-default backend.
+ ## Local Development
 
-- If `NEXT_PUBLIC_API_BASE` is not set, the app uses the production backend:
-  - `https://acadcodegen-production.up.railway.app`
-- Example local dev against a local backend:
-  - `NEXT_PUBLIC_API_BASE=http://localhost:3000`
+ ### Prerequisites
 
-## API Client
+ - Node.js 20+
+ - npm
 
-All network calls are centralized in `lib/api.ts`.
+ ### Install
 
-- Pipeline: `Api.runPipeline()`
-- Job Status: `Api.getJobStatus()` / `Api.getJobLogs()`
-- Artifacts: `Api.getArtifactsSources()` / `Api.getArtifactsAbis()` / `Api.getArtifactsScripts()`
-- ERC20 Deploy: `Api.deployErc20()`
+ ```bash
+ npm ci
+ ```
 
-The Pipeline page (`app/pipeline/page.tsx`) has been refactored to use this client for a single source of truth on URL resolution and error handling.
+ ### Run
 
-## Demo (Mock) API routes
+ The dev server runs on **port 3100**.
 
-Files under `app/api/...` that end with `generate-contract`, `deploy-contract`, and `job/[jobId]/*` are demo-only mocks for UI illustration. They do not contact the production backend and return simplified shapes.
+ ```bash
+ npm run dev
+ ```
 
-- Each mock has a banner comment noting its purpose and that it is not used by the main pipeline UI.
+ ### Build / Start
 
-## Max Iterations control
+ ```bash
+ npm run build
+ npm run start
+ ```
 
-On the pipeline console, you can choose the max AI fix iterations under the Network selector. Available values: `11`, `15`, `21`.
+ ## Routing
 
-## Docs
+ Key routes in this app:
 
-- Full API reference: `docs/AI_Deployment_API.md`
-- UI/UX Guide: `docs/AI_Deploy_UI_UX_Guide.md`
+ - `/` Home / marketing
+ - `/signin` OTP sign-in
+ - `/signup` OTP sign-up
+ - `/projects` Projects / jobs list
+ - `/chat` Chat / pipeline UI
+ - `/chat/[id]` Job / chat detail
+ - `/profile` Profile (includes wallet connect)
+ - `/subscription` Subscription
 
-## Notes
+ Redirects:
 
-- By default, `/pipeline` redirects to `/smart-contract`. If you want to change the canonical route, update `next.config.js` accordingly.
+ - `/pipeline` redirects to `/smart-contract` (configured in `next.config.js`). If you change the canonical route, update `next.config.js`.
+
+ ## Backend / API Integration
+
+ All browser requests go through the local Next.js proxy route to preserve cookies:
+
+ - **Proxy route**: `app/api/proxy/[...path]/route.ts`
+ - **Browser base**: `/api/proxy`
+
+ Server-side / deployment base URL is configured via:
+
+ - `NEXT_PUBLIC_API_BASE_URL`
+
+ If `NEXT_PUBLIC_API_BASE_URL` is not set, the code falls back to the default currently hardcoded in:
+
+ - `lib/api.ts`
+ - `app/api/proxy/[...path]/route.ts`
+
+ ## Environment Variables
+
+ Create a `.env.local` in the repo root as needed.
+
+ Common variables:
+
+ - `NEXT_PUBLIC_API_BASE_URL` (optional; upstream user-api base URL used by the proxy)
+ - `NEXT_PUBLIC_SITE_URL` (optional; used for sitemap base URL)
+ - `NEXT_PUBLIC_BASE_URL` (optional; used in WalletConnect metadata; defaults to `http://localhost:3100`)
+ - `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` (required for WalletConnect in production)
+
+ ## Web3 / WalletConnect
+
+ Wallet configuration lives in:
+
+ - `lib/web3.ts`
+
+ It uses `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` and sets Ginie-branded metadata for wallet prompts.
+
+ ## Documentation
+
+ - `docs/wallet-based-deployment/` contains wallet-deployment integration docs.
+
+ ## Troubleshooting
+
+ ### Port 3100 already in use
+
+ If `npm run dev` fails with `EADDRINUSE: address already in use :::3100`, either:
+
+ - Stop the process using port 3100, or
+ - Change the port in `package.json` scripts (`next dev -p 3100`).
