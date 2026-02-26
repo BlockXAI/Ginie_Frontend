@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { ExternalLink, Globe, Copy, Check, FileCode, Layers, CheckCircle2, XCircle, Clock, Play } from "lucide-react";
+import { ExternalLink, Globe, Copy, Check, FileCode, Layers, CheckCircle2, Trash2 } from "lucide-react";
 
 type DAppProject = {
   id: string;
@@ -47,9 +47,11 @@ const StatusDot = ({ status }: { status?: string | null }) => {
 export default function DAppCard({
   project,
   onOpen,
+  onDelete,
 }: {
   project: DAppProject;
   onOpen: (id: string) => void;
+  onDelete?: (id: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -148,6 +150,16 @@ export default function DAppCard({
 
       {/* Action bar */}
       <div className="border-t border-white/5 px-4 py-2 flex items-center justify-end gap-2">
+        {onDelete && (
+          <button
+            onClick={() => onDelete(project.id)}
+            className="p-2 rounded-md hover:bg-red-500/20 text-white/60 hover:text-red-400 transition-colors"
+            title="Delete"
+            aria-label="Delete"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        )}
         <button
           onClick={() => onOpen(project.id)}
           className="text-xs px-3 py-1 rounded bg-white/5 hover:bg-white/10 text-white/80 transition-colors"

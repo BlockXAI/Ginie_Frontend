@@ -466,6 +466,11 @@ export const api = {
     const path = `/u/proxy/builder/projects/${encodeURIComponent(id)}${qs.toString() ? `?${qs.toString()}` : ''}`;
     return request<{ ok: true; project: BuilderProject; messages?: any }>(path, { signal: extra?.signal });
   },
+  builderDeleteProject: (id: string, extra?: RequestExtras) =>
+    request<{ ok: true }>(`/u/proxy/builder/projects/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      signal: extra?.signal,
+    }),
   builderGetStatus: (id: string, extra?: RequestExtras) =>
     request<{ ok: true; project: BuilderProject; status: any }>(`/u/proxy/builder/projects/${encodeURIComponent(id)}/status`, { signal: extra?.signal }),
   builderListFiles: (id: string, extra?: RequestExtras) =>

@@ -59,9 +59,20 @@ export default function ChatPageContent() {
             return;
           }
 
+          const walletPromptPreamble =
+            "You are generating a production-ready Solidity smart contract for deployment.\n" +
+            "Hard requirements (must follow):\n" +
+            "1) Add SPDX header as the FIRST line: // SPDX-License-Identifier: UNLICENSED\n" +
+            "2) Add a pragma like: pragma solidity ^0.8.20;\n" +
+            "3) NEVER mark a function `pure` if it reads contract storage (mappings/arrays/structs/state vars) or msg.sender/block.timestamp/etc.\n" +
+            "   - If it reads state: use `view`.\n" +
+            "   - If it writes state: use no mutability modifier.\n" +
+            "4) No pseudo-code. Output only valid Solidity.\n" +
+            "\n";
+
           const callbackUrl = typeof window !== "undefined" ? `${window.location.origin}/chat` : undefined;
           const result = await api.walletDeploy({
-            prompt: trimmed,
+            prompt: walletPromptPreamble + trimmed,
             network: "avalanche-fuji", //  Network
             callbackUrl,
             strictArgs: true,
@@ -233,7 +244,7 @@ export default function ChatPageContent() {
         <div className="mb-12">
           <h1 className="text-center tracking-tight">
             <span className="font-playfair italic font-light text-5xl sm:text-6xl md:text-7xl gradient-text">
-              Ginnie.
+              Ginie.
             </span>
           </h1>
         </div>

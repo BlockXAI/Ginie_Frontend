@@ -36,6 +36,9 @@ export function WalletDeployModal({
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [pollCount, setPollCount] = useState(0);
+  const [contractAddress, setContractAddress] = useState<string | null>(null);
+  const [verificationState, setVerificationState] = useState<"idle" | "pending" | "verified" | "failed">("idle");
+  const [verificationUrl, setVerificationUrl] = useState<string | null>(null);
 
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
@@ -49,6 +52,11 @@ export function WalletDeployModal({
   const requiredChainId = session?.unsignedTx?.chainId || session?.chainId || avalancheFuji.id;
   const isWrongChain = isConnected && chainId !== requiredChainId;
 
+  const networkLabel =
+    requiredChainId === avalancheFuji.id
+      ? "Avalanche Fuji"
+      : session?.networkName || session?.network || "Avalanche Fuji";
+
   // Poll for session to be ready
   const pollForSession = useCallback(async () => {
     if (!jobId) return;
@@ -59,13 +67,23 @@ export function WalletDeployModal({
       const jobData = (status as any)?.data;
       const jobState = jobData?.state;
 
+      const addr = jobData?.cache?.address || jobData?.result?.address || jobData?.result?.contractAddress;
+      if (typeof addr === "string" && addr) setContractAddress(addr);
+
       // Check if job failed
       if (jobState === "failed" || jobState === "error") {
         const errorMsg = jobData?.error ||
                          jobData?.message ||
                          jobData?.reason ||
                          "Contract generation failed. Please try again.";
-        setError(errorMsg);
+        let msg = String(errorMsg);
+        if (msg.includes("SPDX") || msg.toLowerCase().includes("license identifier")) {
+          msg += "\n\nFix: add `// SPDX-License-Identifier: UNLICENSED` as the first line of your Solidity file.";
+        }
+        if (msg.includes("declared as pure") && msg.includes("requires \"view\"")) {
+          msg += "\n\nFix: change the function modifier from `pure` to `view` (or remove the modifier if the function writes state).";
+        }
+        setError(msg);
         setStep("error");
         return true;
       }
@@ -121,6 +139,13 @@ export function WalletDeployModal({
     return () => clearInterval(interval);
   }, [open, step, pollForSession]);
 
+  useEffect(() => {
+    if (open) return;
+    setContractAddress(null);
+    setVerificationState("idle");
+    setVerificationUrl(null);
+  }, [open]);
+
   // Handle transaction sent
   useEffect(() => {
     if (sentTxHash && step === "signing") {
@@ -137,12 +162,55 @@ export function WalletDeployModal({
     }
   }, [sentTxHash, step, session?.sessionId, address]);
 
-  // Handle transaction confirmed
+  // Handle transaction confirmed + trigger auto-verification
   useEffect(() => {
     if (isConfirmed && step === "submitted") {
       setStep("confirmed");
+      setVerificationState("pending");
+      // Trigger auto-verification in the background
+      (async () => {
+        try {
+          const network = session?.network || session?.networkName || "avalanche-fuji";
+          await api.verifyByJob(jobId, network);
+          console.log("Auto-verification triggered for job:", jobId);
+        } catch (err) {
+          // Verification may fail silently - it's a best-effort operation
+          console.warn("Auto-verification failed:", err);
+        }
+      })();
     }
-  }, [isConfirmed, step]);
+  }, [isConfirmed, step, jobId, session?.network, session?.networkName]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (step !== "confirmed") return;
+    if (!contractAddress) return;
+
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const network = session?.network || session?.networkName || "avalanche-fuji";
+        const res = await api.verifyStatus(contractAddress, network);
+        if (cancelled) return;
+        if (res?.verified) {
+          setVerificationState("verified");
+        } else {
+          setVerificationState("pending");
+        }
+        setVerificationUrl(res?.explorerUrl || null);
+      } catch (e) {
+        if (cancelled) return;
+        setVerificationState("failed");
+      }
+    };
+
+    void tick();
+    const id = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [open, step, contractAddress, session?.network, session?.networkName]);
 
   const handleSign = async () => {
     if (!session?.unsignedTx || !isConnected) return;
@@ -282,7 +350,7 @@ export function WalletDeployModal({
                 )}
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Network</span>
-                  <span className="font-medium">{session.networkName || session.network}</span>
+                  <span className="font-medium">{networkLabel}</span>
                 </div>
                 {session.estimatedGas && (
                   <div className="flex justify-between text-sm">
@@ -307,7 +375,7 @@ export function WalletDeployModal({
                   ) : (
                     <>
                       <AlertCircle className="mr-2 h-4 w-4" />
-                      Switch to {session.networkName || "Base Sepolia"}
+                      <span className="whitespace-nowrap">Switch to {networkLabel}</span>
                     </>
                   )}
                 </Button>
@@ -365,7 +433,7 @@ export function WalletDeployModal({
 
           {/* Confirmed State */}
           {step === "confirmed" && (
-            <div className="flex flex-col items-center gap-4 py-8">
+            <div className="flex flex-col items-center gap-4 py-6">
               <CheckCircle className="h-12 w-12 text-green-500" />
               <div className="text-center">
                 <p className="text-lg font-medium">Deployment Successful!</p>
@@ -373,6 +441,60 @@ export function WalletDeployModal({
                   Your contract has been deployed to the blockchain
                 </p>
               </div>
+
+              {/* Contract Details Card */}
+              <div className="w-full bg-muted/50 rounded-lg p-4 space-y-3">
+                {session?.contractName && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Contract</span>
+                    <span className="font-medium">{session.contractName}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Network</span>
+                  <span className="font-medium">{networkLabel}</span>
+                </div>
+                {contractAddress && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Address</span>
+                    <span className="font-mono text-xs">{contractAddress}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Verification</span>
+                  <span
+                    className={
+                      verificationState === "verified"
+                        ? "font-medium text-green-500"
+                        : verificationState === "failed"
+                        ? "font-medium text-red-500"
+                        : verificationState === "pending"
+                        ? "font-medium text-amber-500"
+                        : "font-medium text-muted-foreground"
+                    }
+                  >
+                    {verificationState === "verified"
+                      ? "Verified"
+                      : verificationState === "failed"
+                      ? "Failed"
+                      : verificationState === "pending"
+                      ? "Pending"
+                      : "Not started"}
+                  </span>
+                </div>
+                {verificationUrl && (
+                  <a
+                    href={verificationUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-end gap-1 text-xs text-blue-500 hover:underline"
+                  >
+                    View verification
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+
               {txHash && (
                 <a
                   href={getExplorerUrl(txHash)}
@@ -380,12 +502,12 @@ export function WalletDeployModal({
                   rel="noopener noreferrer"
                   className="flex items-center gap-1 text-sm text-blue-500 hover:underline"
                 >
-                  View Transaction
+                  View Transaction on Explorer
                   <ExternalLink className="h-4 w-4" />
                 </a>
               )}
-              <Button onClick={handleComplete} className="w-full mt-4">
-                View Contract Details
+              <Button onClick={handleComplete} className="w-full mt-2">
+                View Contract Details & Files
               </Button>
             </div>
           )}
